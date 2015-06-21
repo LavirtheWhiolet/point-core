@@ -286,6 +286,17 @@ class Post(object):
 
         return self.id
 
+    def stick(self):
+        sticked_post = db.fetchone("SELECT id FROM posts.posts "
+                                   "WHERE date_part('year', created) > 2200 "
+                                   "AND author=%s;", [self.author.id])
+        print('>>> ', sticked_post)
+        #if sticked_post:
+        #    db.perform("UPDATE posts.posts "
+        #               "SET created = created - INTERVAL '250 years' "
+        #               "WHERE id=42505;")
+
+
     def delete(self):
         files = []
         for ff in db.fetchall("SELECT files FROM posts.comments "
