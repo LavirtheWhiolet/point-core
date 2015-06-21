@@ -290,7 +290,7 @@ class Post(object):
         sticked_post = db.fetchone("SELECT id FROM posts.posts "
                                    "WHERE date_part('year', created) > 2200 "
                                    "AND author=%s;", [self.author.id])
-        print('>>> ', sticked_post)
+        print '>>> ', sticked_post
         #if sticked_post:
         #    db.perform("UPDATE posts.posts "
         #               "SET created = created - INTERVAL '250 years' "

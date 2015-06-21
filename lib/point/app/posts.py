@@ -292,6 +292,18 @@ def add_post(post, title=None, link=None, tags=None, author=None, to=None,
     return post_id
 
 @check_auth
+def stick_post(post_id):
+    """
+    Stick post
+    """
+    post = Post(post_id)
+
+    if env.user != post.author:
+        raise PostAuthorError
+
+    post.stick()
+
+@check_auth
 def delete_post(post_id):
     """
     Delete post
