@@ -37,13 +37,24 @@ class PostDiffError(PostError):
 class PostCommentedError(PostError):
     pass
 
+class PostReadonlyError(PostError):
+    pass
+
 class PostLimitError(PostError):
     pass
+
+class PostAlreadyPinnedError(PostError):
+    pass
+
+class PostNotPinnedError(PostError):
+    pass
+
 
 class Post(object):
     def __init__(self, post_id, author=None, type=None, tags=None,
                  private=None, created=None, title=None, link=None, text=None,
-                 edited=None, tz=settings.timezone, archive=None, files=None):
+                 edited=None, tz=settings.timezone, archive=None, files=None,
+                 pinned=None):
         self._comments_count = None
 
         if post_id:
@@ -56,7 +67,7 @@ class Post(object):
             res = db.fetchone("SELECT p.author, u.login, p.type, p.private, "
                              "p.created at time zone %s AS created, "
                              "p.tags, p.title, p.link, p.text, p.files, "
-                             "p.edited, p.archive "
+                             "p.edited, p.archive, p.pinned "
                              "FROM posts.posts p "
                              "JOIN users.logins u ON p.author=u.id "
                              "WHERE p.id=%s;",
@@ -79,7 +90,7 @@ class Post(object):
                 self.private = res['private']
 
             if tags is not None:
-                self.tags = [ t.decode('utf8') if isinstance(t, str) else t for t in tags ]
+                self.tags = [ t.decode('utf8').strip() if isinstance(t, str) else t for t in tags ]
             else:
                 self.tags = res['tags']
 
@@ -122,6 +133,11 @@ class Post(object):
             else:
                 self.archive = res['archive']
 
+            if pinned is not None:
+                self.pinned = pinned
+            else:
+                self.pinned = res['pinned']
+
             if isinstance(files, (list, tuple)):
                 self.files = files
             else:
@@ -159,6 +175,7 @@ class Post(object):
             self.edited = False
             self.editable = True
             self.archive = False if archive is None else archive
+            self.pinned = False if pinned is None else pinned
 
         self.tz = tz
 
@@ -168,7 +185,8 @@ class Post(object):
     @classmethod
     def from_data(cls, post_id, author=None, type=None, tags=None,
                   private=None, created=None, title=None, link=None, text=None,
-                  edited=None, tz=settings.timezone, archive=False, files=None):
+                  edited=None, tz=settings.timezone, archive=False, files=None,
+                  pinned=False):
         self = cls(None)
         if post_id:
             self.id = post_id.lower()
@@ -206,6 +224,7 @@ class Post(object):
             self.tz = tz
 
         self.archive = archive
+        self.pinned = pinned
 
         if isinstance(files, (list, tuple)):
             self.files = files
@@ -236,10 +255,10 @@ class Post(object):
                                [unb26(self.id), self.author.id, t])
 
             db.perform("UPDATE posts.posts SET tags=%s, private=%s,"
-                       "text=%s, edited=%s, archive=%s, files=%s "
+                       "text=%s, edited=%s, archive=%s, pinned=%s, files=%s "
                        "WHERE id=%s;",
                        [self.tags, bool(self.private), self.text,
-                        self.edited, self.archive, self.files,
+                        self.edited, self.archive, self.pinned, self.files,
                         unb26(self.id)])
 
         else:
@@ -248,12 +267,12 @@ class Post(object):
 
             res = db.fetchone("INSERT INTO posts.posts "
                              "(author, type, private, tags, title, link, text, "
-                             "created, edited, archive, files) "
-                             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                             "created, edited, archive, pinned, files) "
+                             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                              "RETURNING id;",
                              [self.author.id, self.type, bool(self.private),
                               self.tags, self.title, self.link, self.text,
-                              self.created, self.edited, self.archive, self.files])
+                              self.created, self.edited, self.archive, self.pinned, self.files])
             if not res:
                 raise PostError
 
@@ -375,6 +394,10 @@ class Post(object):
                           [user.id, unb26(self.id)])
         return bool(res)
 
+    def set_pinned(self, value=True):
+        self.pinned = value
+        self.save()
+
     def comments(self, last=False, all=False, offset=None, limit=None,
                  cuser=None):
         if last:
@@ -398,6 +421,7 @@ class Post(object):
                                 "THEN c.anon_login ELSE u1.login END AS login,"
                               "c.created at time zone %%s AS created, "
                               "c.text, c.files, "
+                              "c.updated at time zone %%s AS updated, "
                               "CASE WHEN rc.comment_id IS NOT NULL "
                                 "THEN true ELSE false END AS is_rec, "
                               "ur.user_id AS recommended, "
@@ -420,7 +444,7 @@ class Post(object):
                                 "AND ub.comment_id=c.comment_id "
                               "WHERE c.post_id=%%s AND c.comment_id>=%%s "
                               "ORDER BY c.created%s%s;" % (order, lim),
-                              [self.tz, cuser.id, cuser.id, unb26(self.id),
+                              [self.tz, self.tz, cuser.id, cuser.id, unb26(self.id),
                                offset])
         else:
             res = db.fetchall("SELECT c.comment_id, c.to_comment_id,"
@@ -429,6 +453,7 @@ class Post(object):
                                 "THEN c.anon_login ELSE u1.login END AS login,"
                               "c.created at time zone %%s AS created, "
                               "c.text, c.files, "
+                              "c.updated at time zone %%s AS updated, "
                               "CASE WHEN rc.comment_id IS NOT NULL "
                                 "THEN true ELSE false END AS is_rec, "
                               "false AS recommended, "
@@ -443,7 +468,7 @@ class Post(object):
                                 "AND rc.rcid=c.comment_id "
                               "WHERE c.post_id=%%s AND c.comment_id>=%%s "
                               "ORDER BY c.created%s%s;" % (order, lim),
-                              [self.tz, unb26(self.id), offset])
+                              [self.tz, self.tz, unb26(self.id), offset])
         if last:
             res.reverse()
 
@@ -470,6 +495,7 @@ class Post(object):
                                               bookmarked=c['bookmarked'],
                                               is_rec=c['is_rec'],
                                               files=c['files'],
+                                              updated=c['updated'],
                                               unread=unr)
             comments.append(comment)
 
@@ -539,6 +565,7 @@ class Post(object):
         img_url = lambda i: 'http'+settings.media_root+'/'+i
         post_dict = {
             "id": self.id,
+            "pinned": True if self.pinned else False,
             "author": self.author.todict(),
             "private": self.private,
             "type": self.type,
@@ -564,6 +591,9 @@ class CommentNotFound(CommentError):
 class CommentAuthorError(CommentError):
     pass
 
+class CommentEditingForbiddenError(CommentError):
+    pass
+
 class Comment(object):
     def __init__(self, post, id, to_comment_id=None, author=None,
                                  created=None, text=None, archive=False,
@@ -580,12 +610,13 @@ class Comment(object):
             res = db.fetchone("SELECT c.author, u.login, i.name, i.avatar, "
                              "c.to_comment_id, "
                              "c.anon_login, "
-                             "c.created, c.text, c.files "
+                             "c.created at time zone %s AS created, "
+                             "c.text, c.files, c.updated "
                              "FROM posts.comments c "
                              "JOIN users.logins u ON u.id=c.author "
                              "JOIN users.info i ON u.id=i.id "
                              "WHERE post_id=%s AND comment_id=%s;",
-                             [unb26(self.post.id), self.id])
+                             [self.post.tz, unb26(self.post.id), self.id])
 
             if not res:
                 raise CommentNotFound(self.post.id, id)
@@ -605,6 +636,7 @@ class Comment(object):
             self.recommendations = 0
             self.recommended = False
             self.files = res['files']
+            self.updated = res['updated']
         self.comments = []
         self.archive = archive
 
@@ -619,7 +651,7 @@ class Comment(object):
                                  created=None, text=None,
                                  recommended=False, bookmarked=False,
                                  is_rec=False, archive=False, files=None,
-                                 unread=False):
+                                 updated=None, unread=False):
         self = cls(None, None)
         self.post = post
         if id:
@@ -638,10 +670,11 @@ class Comment(object):
             self.files = files
         else:
             self.files = None
+        self.updated = updated
         self.unread = unread
         return self
 
-    def save(self):
+    def save(self, update=False):
         if not self.post.id:
             raise PostNotFound
         if isinstance(self.author, AnonymousUser):
@@ -655,37 +688,46 @@ class Comment(object):
         if isinstance(self.text, str):
             self.text = self.text.decode('utf-8', 'ignore')
 
-        if self.archive and self.id:
+        if update:
+            res = db.perform("""
+                UPDATE posts.comments SET (text, updated) = (%s, now())
+                WHERE post_id = %s AND comment_id = %s;
+                """, [self.text,
+                    unb26(self.post.id) if isinstance(self.post.id, basestring) else self.post.id,
+                    self.id])
             comment_id = self.id
-            res = db.fetchone("INSERT INTO posts.comments "
-                              "(post_id, comment_id, author, created,"
-                              "to_comment_id, anon_login, text, files) "
-                              "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-                              "RETURNING comment_id;",
-                              [unb26(self.post.id), self.id, self.author.id,
-                               self.created,
-                               self.to_comment_id, anon_login, self.text,
-                               self.files])
         else:
-            redis = RedisPool(settings.storage_socket)
-            while True:
-                try:
-                    comment_id = redis.incr('cmnt.%s' % self.post.id)
-                    res = db.fetchone("INSERT INTO posts.comments "
-                                     "(post_id, comment_id, author, created,"
-                                     "to_comment_id, anon_login, text, files) "
-                                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-                                     "RETURNING comment_id;",
-                                     [unb26(self.post.id), comment_id,
-                                      self.author.id, self.created,
-                                      self.to_comment_id,
-                                      anon_login, self.text, self.files])
-                    break
-                except IntegrityError:
-                    pass
+            if self.archive and self.id:
+                comment_id = self.id
+                res = db.fetchone("INSERT INTO posts.comments "
+                                  "(post_id, comment_id, author, created,"
+                                  "to_comment_id, anon_login, text, files) "
+                                  "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                                  "RETURNING comment_id;",
+                                  [unb26(self.post.id), self.id, self.author.id,
+                                   self.created,
+                                   self.to_comment_id, anon_login, self.text,
+                                   self.files])
+            else:
+                redis = RedisPool(settings.storage_socket)
+                while True:
+                    try:
+                        comment_id = redis.incr('cmnt.%s' % self.post.id)
+                        res = db.fetchone("INSERT INTO posts.comments "
+                                         "(post_id, comment_id, author, created,"
+                                         "to_comment_id, anon_login, text, files) "
+                                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                                         "RETURNING comment_id;",
+                                         [unb26(self.post.id), comment_id,
+                                          self.author.id, self.created,
+                                          self.to_comment_id,
+                                          anon_login, self.text, self.files])
+                        break
+                    except IntegrityError:
+                        pass
 
-            if res:
-                redis.incr('cmnt_cnt.%s' % unb26(self.post.id))
+                if res:
+                    redis.incr('cmnt_cnt.%s' % unb26(self.post.id))
 
         try:
             es = elasticsearch.Elasticsearch()
@@ -739,6 +781,10 @@ class Comment(object):
             "text": self.text,
             "is_rec": self.is_rec
         }
+
+    def is_editable(self):
+        return datetime.now() - timedelta(seconds=settings.edit_comment_expire) \
+        <= self.created
 
 class RecommendationError(PointError):
     pass

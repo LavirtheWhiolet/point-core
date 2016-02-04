@@ -117,8 +117,8 @@ class User(object):
         else:
             res = db.fetchone("SELECT u.id, u.login FROM users.accounts a "
                              "JOIN users.logins u ON u.id=a.user_id "
-                             "WHERE a.type=%s AND a.address=%s;",
-                             [field, value]) #, _cache=3600)
+                             "WHERE a.type=%s AND lower(a.address)=%s;",
+                             [field, value.lower()]) #, _cache=3600)
             if res:
                 self.id, self.login = res
                 cache_store('addr_id_login:%s' % value.lower(),[res[0], res[1]])
@@ -983,6 +983,29 @@ class User(object):
             users.append(u)
 
         return sorted(users, key=lambda u: u.login.lower())
+
+    def blacklisters(self):
+        if not self.id:
+            return []
+
+        res = db.fetchall("""
+            SELECT u.id, u.login, i.name, i.gender, i.avatar
+            FROM users.blacklist AS bl
+            INNER JOIN users.logins AS u ON bl.user_id = u.id
+            LEFT OUTER JOIN users.info AS i ON i.id = bl.user_id
+            WHERE bl.to_user_id=%s;
+            """, [self.id])
+
+        users = []
+        for r in res:
+            u = User.from_data(r['id'], r['login'],
+                    info={'name': r['name'], 'gender': r['gender'],
+                          'avatar': r['avatar']})
+            users.append(u)
+
+        users.sort(key=lambda u: u.login.lower())
+        return users
+
 
     def tags(self, limit=None, sort_by_name=False, all=False):
         if not self.id:

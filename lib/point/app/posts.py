@@ -1,12 +1,15 @@
-from geweb import log
+# -*- coding: UTF-8 -*-
+
 import geweb.db.pgsql as db
 from point.util.env import env
 from point.core.user import User, AlreadySubscribed, SubscribeError, check_auth
 from point.core.post import Post, PostAuthorError, PostTextError, \
                             PostUpdateError, PostDiffError, PostNotFound
-from point.core.post import Comment, CommentAuthorError, CommentNotFound
+from point.core.post import Comment, CommentAuthorError, CommentNotFound, \
+                            CommentEditingForbiddenError
 from point.core.post import RecommendationError, RecommendationNotFound, \
-                            RecommendationExists, PostLimitError
+                            RecommendationExists, PostLimitError, \
+                            PostReadonlyError
 from point.core.post import BookmarkExists
 from point.util.redispool import RedisPool, publish
 from point.util import uniqify, b26, unb26, diff_ratio, timestamp
@@ -247,6 +250,15 @@ def add_post(post, title=None, link=None, tags=None, author=None, to=None,
         except IntegrityError:
             pass
 
+    publish('msg.self', {'to': [env.user.id], 'a': 'post', 'post_id': post_id,
+                    'type': post.type, 'author': post.author.login,
+                    'author_name': post.author.get_info('name'),
+                    'tags': post.tags, 'private': post.private,
+                    'title': post.title,'text': post.text, 'link': post.link,
+                    'to_users': [ u.login for u in to_users ],
+                    'files': files,
+                    'cut': True})
+
     if subscribers:
         publish('msg', {'to': subscribers, 'a': 'post', 'post_id': post_id,
                         'type': post.type, 'author': post.author.login,
@@ -376,7 +388,7 @@ def edit_post(post_id, text=None, tags=None, private=None, files=None):
         publish('msg', {'to':subscribers, 'a':'post_edited',
                         'post_id':post.id, 'author':env.user.login,
                         'tags':tags, 'text':text, 'private': post.private,
-                        'files':files})
+                        'files':files, 'cut': True})
 
     _thumbnails(text)
 
@@ -468,14 +480,14 @@ def select_posts(author=None, author_private=None, deny_anonymous=None, private=
     joins = []
     if tags:
         joins.append("JOIN posts.tags t ON p.id=t.post_id")
-    if author_private is not None:
+    if tags or author_private is not None:
         joins.append("JOIN users.profile up ON up.id=u.id")
 
     if env.user.id:
         query = ("SELECT DISTINCT p.id, NULL AS comment_id, "
                  "p.author, u.login, i.name, i.avatar, "
                  "u.type AS user_type, "
-                 "p.private, p.created, p.resource, "
+                 "p.private, p.created at time zone '%(tz)s' as created, p.resource, "
                  "p.type, p.title, p.link, p.tags, p.text, "
                  "(p.edited=false AND p.created+interval '1800 second' >= now()) AS editable, "
                  "p.archive, p.files, "
@@ -493,11 +505,11 @@ def select_posts(author=None, author_private=None, deny_anonymous=None, private=
                 "LEFT OUTER JOIN posts.bookmarks rb "
                     "ON p.id=rb.post_id AND %(user_id)s=rb.user_id AND "
                     "rb.comment_id=0 " % \
-                 {'joins': ' '.join(joins), 'user_id': env.user.id})
+                 {'joins': ' '.join(joins), 'user_id': env.user.id, 'tz': env.user.get_profile('tz')})
     else:
         query = ("SELECT DISTINCT p.id, NULL AS comment_id, "
                  "p.author, u.login, i.name, i.avatar,"
-                 "p.private, p.created, p.resource, "
+                 "p.private, p.created at time zone '%(tz)s' as created, p.resource, "
                  "p.type, p.title, p.link, p.tags, p.text, "
                  "p.archive, p.files, "
                  "false AS editable, "
@@ -507,7 +519,7 @@ def select_posts(author=None, author_private=None, deny_anonymous=None, private=
                  "FROM posts.posts p JOIN users.logins u ON p.author=u.id "
                  " %(joins)s "
                  "JOIN users.info i ON p.author=i.id " % \
-                 {'joins': ' '.join(joins)})
+                 {'joins': ' '.join(joins), 'tz': settings.timezone})
     cond = []
     params = []
     if author:
@@ -542,7 +554,7 @@ def select_posts(author=None, author_private=None, deny_anonymous=None, private=
     #offset = ' OFFSET %d' % offset if offset else ''
     limit = ' LIMIT %d' % limit if limit else ''
 
-    query += (" ORDER BY p.created %s %s %s;" % (order, offset_cond, limit))
+    query += (" ORDER BY created %s %s %s;" % (order, offset_cond, limit))
 
     res = db.fetchall(query, params)
 
@@ -730,7 +742,9 @@ def recent_blog_posts(author=None, limit=10, offset=0, asc=False, before=None):
         "p.private, "
         "CASE WHEN r.comment_id>0 THEN c.text ELSE p.text END "
            "AS text, "
-        "p.archive, p.files, "
+        "p.archive, p.files, p.pinned AS pinned, "
+        "(CASE WHEN p.author != %%(author_id)s THEN FALSE "
+            "ELSE p.pinned END) AS pinned_sort, "
         "sp.post_id AS subscribed, "
         "rp.post_id AS recommended, "
         "rb.post_id AS bookmarked, "
@@ -768,7 +782,7 @@ def recent_blog_posts(author=None, limit=10, offset=0, asc=False, before=None):
         "WHERE r.user_id=%%(author_id)s AND "
             "(w.user_id IS NOT NULL OR pp.private=false "
              "OR r.user_id=%%(user_id)s) %s "
-        "ORDER BY r.created %s "
+        "ORDER BY pinned_sort DESC, r.created %s "
         "%s LIMIT %%(limit)s;"% (before_cond, order, offset),
         {'user_id': env.user.id, 'author_id': author.id,
          'tz': env.user.get_profile('tz'),
@@ -1069,6 +1083,9 @@ def add_comment(post_id, to_comment_id, text, files=None,
 
     post = show_post(post_id)
 
+    if u'readonly' in post.tags and post.author.id != env.user.id:
+        raise PostReadonlyError
+
     if post.archive:
         raise SubscribeError
 
@@ -1103,6 +1120,11 @@ def add_comment(post_id, to_comment_id, text, files=None,
     subscribers = filter(lambda u: u!=env.user.id,
                          uniqify(hls+post.get_subscribers(bluser=env.user)))
 
+    publish('msg.self', {'to':[env.user.id], 'a':'comment', 'author':env.user.login,
+                    'post_id':post_id, 'comment_id':comment_id, 'text':text,
+                    'to_comment_id':to_comment_id, 'to_text':to_text,
+                    'files':files})
+
     publish('msg', {'to':subscribers, 'a':'comment', 'author':env.user.login,
                     'post_id':post_id, 'comment_id':comment_id, 'text':text,
                     'to_comment_id':to_comment_id, 'to_text':to_text,
@@ -1134,11 +1156,47 @@ def add_comment(post_id, to_comment_id, text, files=None,
     #                {'post':post.id, 'comment':comment_id},
     #                expire=600)
 
+    if post.comments_count():
+        comment_ids = map(lambda c: c[0],
+                   db.fetchall("SELECT comment_id FROM "
+                               "posts.unread_comments "
+                               "WHERE user_id = %(id)s AND "
+                               " post_id = %(pid)s;", 
+                               {'id':env.user.id, 'pid':unb26(post_id)}))
+        clear_unread_comments(post_id, comment_ids)
+
     _store_last(comment)
 
     _thumbnails(text)
 
     return comment_id
+
+@check_auth
+def edit_comment(post_id, comment_id, text, editor=None):
+    comment = Comment(post_id, comment_id)
+
+    if datetime.now() - timedelta(seconds=settings.edit_comment_expire) \
+        > comment.created:
+        raise CommentEditingForbiddenError(post_id, comment_id)
+
+    if not editor:
+        editor = env.user
+
+    if comment.author == editor:
+        text = text.strip()
+        if isinstance(text, str):
+            text = text.decode('utf-8', 'ignore')
+        if len(text) > 4096:
+            text = text[:4096]
+
+        comment.text = text
+        comment.save(update=True)
+
+        _thumbnails(comment.text)
+
+    else:
+        raise PostAuthorError(post_id, comment_id)
+
 
 @check_auth
 def show_comment(post_id, comment_id):
@@ -1291,12 +1349,36 @@ def recommend(post_id, comment_id, text=None):
     if post.private:
         raise RecommendationError
 
+    if not comment_id and u'norec' in post.tags:
+        raise RecommendationError
+
+    if text is not None and u'readonly' in post.tags:
+        raise PostReadonlyError
+
+
     if comment_id:
         comment = Comment(post, comment_id)
         if comment.author == env.user:
             raise RecommendationError
+        post_author = comment.author
+        post_text = comment.text
+        tags = []
+        title = ''
+        link = ''
+        files = comment.files
+
     elif post.author == env.user:
         raise RecommendationError
+
+    else:
+        post_author = post.author
+        post_text = post.text
+        tags = post.tags
+        title = post.title
+        link = post.link
+        files = post.files
+
+    ccnt = post.comments_count()
 
     res = db.fetchone("SELECT post_id FROM posts.recommendations "
                      "WHERE post_id=%s "
@@ -1342,19 +1424,22 @@ def recommend(post_id, comment_id, text=None):
     else:
         tq = ''
 
-    res = db.fetchall("((SELECT user_id FROM subs.recommendations "
+
+    res = db.fetchall("(((SELECT user_id FROM subs.recommendations "
                       "WHERE to_user_id=%%(user_id)s "
+                      "UNION "
+                      "SELECT user_id FROM subs.posts "
+                      "WHERE post_id=%%(post_id)s and user_id!=%%(user_id)s) "
                       "EXCEPT "
                       "SELECT user_id FROM posts.recommendations_recv "
                       "WHERE post_id=%%(post_id)s "
                       "AND comment_id=COALESCE(%%(comment_id)s, 0) "
                       "EXCEPT "
-                      "SELECT user_id FROM subs.posts "
-                      "WHERE post_id=%%(post_id)s "
-                      "EXCEPT "
                       "SELECT user_id FROM users.blacklist WHERE "
-                      "to_user_id=%%(author_id)s) "
-                      "%s )%s;" % (tq, wq),
+                      "to_user_id=%%(author_id)s "
+                      "EXCEPT SELECT %s "
+                      ") "
+                      "%s ) %s;" % (post_author.id, tq, wq),
                       {'user_id': env.user.id,
                        'post_id': unb26(post_id),
                        'comment_id': comment_id,
@@ -1644,12 +1729,13 @@ def _plist(res):
         author = User.from_data(r['author'], r['login'],
                             info={'name': r['name'], 'avatar': r['avatar']})
         tags = r['tags'] if 'tags' in r and r['tags'] else []
+        pinned = r['pinned'] if 'pinned' in r else False
 
         post = Post.from_data(b26(r['id']), author=author, private=r['private'],
                               tags=tags, title=r['title'], text=r['text'],
                               link=r['link'], created=r['created'],
                               type=r['type'], archive=r['archive'],
-                              files=r['files'])
+                              files=r['files'], pinned=pinned)
         item['post'] = post
 
         if 'is_rec' in r and r['is_rec']:
