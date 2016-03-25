@@ -430,10 +430,15 @@ class User(object):
                     res[k] = dateutil.parser.parse(res[k]) if res[k] else None
                 self.info = res
             else:
-                res = db.fetchone("SELECT name, email, xmpp, icq, skype, "
-                                 "about, avatar, gender, "
-                                 "birthdate, location, homepage, created "
-                                 "FROM users.info WHERE id=%s;", [self.id])
+                res = db.fetchone("SELECT i.name,p.private, p.deny_anonymous,"
+                                "i.email, i.xmpp, i.icq, i.skype, i.about, "
+                                "i.avatar, i.gender, i.birthdate, i.location,"
+                                "i.homepage, i.created "
+                                "FROM users.info i "
+                                "LEFT OUTER JOIN users.profile p "
+                                "ON (i.id = p.id) "
+                                "WHERE i.id=%s;", [self.id])
+
                 if res:
                     self.info = dict(res)
                     res = dict(res)
@@ -1113,7 +1118,7 @@ class User(object):
             "id": self.id,
             "login": self.login,
             "name": self.get_info("name"),
-            "avatar": self.get_info("avatar")
+            "avatar": self.get_info("avatar"),
         }
 
 class AnonymousUser():
