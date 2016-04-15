@@ -12,6 +12,7 @@ from point.util.md import QuoteBlock, SharpHeader, UrlColons, StrikePattern
 from markdown.util import etree
 import urllib
 from hashlib import md5
+from contextlib import closing
 import json
 
 from geweb import log
@@ -50,7 +51,7 @@ def _gettext(text):
 
     if lang not in translations:
         try:
-            with open(os.path.join(settings.i18n_dir, lang + '.json')) as fd:
+            with closing(open(os.path.join(settings.i18n_dir, lang + '.json'))) as fd:
                 translation = fd.read()
                 translation = re.sub(r'//.+$', '', translation, flags=re.M)
                 translation = re.sub(r'/\*.+?\*/', '', translation, flags=re.S)
