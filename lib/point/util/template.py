@@ -12,6 +12,7 @@ from point.util.md import QuoteBlock, SharpHeader, UrlColons, StrikePattern
 from markdown.util import etree
 import urllib
 from hashlib import md5
+import json
 
 from geweb import log
 
@@ -33,17 +34,38 @@ class NewLineFileSystemLoader(FileSystemLoader):
         return source, path, validator
 
 jinja_env = Environment(loader=NewLineFileSystemLoader(settings.template_path),
-                        #extensions=['jinja2.ext.i18n'],
+                        extensions=['jinja2.ext.i18n'],
                         autoescape=True,
                         cache_size=-1)
 
-def xmpp_template(tmpl_name, _lang=None, _type=None, **context):
-    if not _lang:
-        if env.user and env.user.id:
-            _lang = env.user.get_profile('lang')
-        else:
-            _lang = settings.lang
+translations = {}
 
+def _gettext(text):
+    if env.user and env.user.id:
+        lang = env.user.get_profile('lang')
+    else:
+        lang = settings.lang
+
+    global translations
+
+    if lang not in translations:
+        try:
+            with open(os.path.join(settings.i18n_dir, lang + '.json')) as fd:
+                translation = fd.read()
+                translation = re.sub(r'//.+$', '', translation, flags=re.M)
+                translation = re.sub(r'/\*.+?\*/', '', translation, flags=re.S)
+                translations[lang] = json.loads(translation)
+        except IOError:
+            translations[lang] = {}
+
+    if text in translations[lang]:
+        return translations[lang][text]
+
+    return text
+
+jinja_env.install_gettext_callables(_gettext, _gettext)
+
+def xmpp_template(tmpl_name, _type=None, **context):
     if not _type:
         try:
             if env.user and env.user.get_profile('xhtml'):
@@ -55,7 +77,7 @@ def xmpp_template(tmpl_name, _lang=None, _type=None, **context):
 
     if _type == 'html':
         try:
-            tmpl_path = os.path.join(_lang, 'xhtml', tmpl_name+'.tmpl')
+            tmpl_path = os.path.join('xhtml', tmpl_name+'.tmpl')
             tmpl = jinja_env.get_template(tmpl_path)
             log.debug('Template %s' % tmpl_path)
             tmpl_dict['html'] = tmpl.render(context, settings=settings)
@@ -65,7 +87,7 @@ def xmpp_template(tmpl_name, _lang=None, _type=None, **context):
         finally:
             pass
 
-    tmpl_path = os.path.join(_lang, 'text', tmpl_name+'.tmpl')
+    tmpl_path = os.path.join('text', tmpl_name+'.tmpl')
     tmpl = jinja_env.get_template(tmpl_path)
     tmpl_dict['body'] = tmpl.render(context, settings=settings)
 
