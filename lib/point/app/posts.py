@@ -13,7 +13,7 @@ from point.core.post import RecommendationError, RecommendationNotFound, \
 from point.core.post import BookmarkExists
 from point.util.redispool import RedisPool, publish
 from point.util import uniqify, b26, unb26, diff_ratio, timestamp
-from point.util import cache_get, cache_store
+from point.util import cache_get, cache_store, cache_del
 from point.util.imgproc import make_thumbnail
 from datetime import datetime, timedelta
 from psycopg2 import IntegrityError
@@ -396,6 +396,8 @@ def edit_post(post_id, text=None, tags=None, private=None, files=None):
                         'files':files, 'cut': True})
 
     _thumbnails(text)
+    cache_del('md:%s' % post.id)
+    cache_del('mdx:%s' % post.id)
 
 @check_auth
 def update_post(post_id, text):
@@ -1220,6 +1222,9 @@ def edit_comment(post_id, comment_id, text, editor=None):
                         'text': text,
                         'cut': True})
 
+    cache_del('md:%s.%s' % (post_id, comment_id))
+    cache_del('mdx:%s.%s' % (post_id, comment_id))
+
 
 @check_auth
 def show_comment(post_id, comment_id):
@@ -1792,3 +1797,4 @@ def post_unread(post_id, user_id):
                  "WHERE post_id=%s AND user_id=%s;",
                  [unb26(post_id), user_id])
     return True if res else False
+
