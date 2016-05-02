@@ -171,6 +171,9 @@ class User(object):
 
         raise NotAuthorized
 
+    def get_tune(self):
+        return cache_get("user_tune:%s" % self.id)
+
     def bind_ulogin(self, network, uid, nickname=None, name=None, profile=None):
         if not self.id:
             raise NotAuthorized
@@ -448,6 +451,8 @@ class User(object):
 
             if not self.info:
                 return None
+
+            self.info.update({'tune': self.get_tune()})
 
         if param:
             try:
