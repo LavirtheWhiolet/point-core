@@ -7,6 +7,7 @@ from point.util import b26, unb26
 from point.util.redispool import RedisPool
 from datetime import datetime, timedelta
 from psycopg2 import IntegrityError
+from psycopg2.extras import Json
 from point.util.imgproc import remove_attach
 import elasticsearch
 
@@ -52,7 +53,7 @@ class Post(object):
     def __init__(self, post_id, author=None, type=None, tags=None,
                  private=None, created=None, title=None, link=None, text=None,
                  edited=None, tz=settings.timezone, archive=None, files=None,
-                 pinned=None):
+                 pinned=None, tune=None):
         self._comments_count = None
 
         if post_id:
@@ -65,7 +66,7 @@ class Post(object):
             res = db.fetchone("SELECT p.author, u.login, p.type, p.private, "
                              "p.created at time zone %s AS created, "
                              "p.tags, p.title, p.link, p.text, p.files, "
-                             "p.edited, p.archive, p.pinned "
+                             "p.edited, p.archive, p.pinned, p.tune "
                              "FROM posts.posts p "
                              "JOIN users.logins u ON p.author=u.id "
                              "WHERE p.id=%s;",
@@ -136,6 +137,11 @@ class Post(object):
             else:
                 self.pinned = res['pinned']
 
+            if tune is not None:
+                self.tune = tune
+            else:
+                self.tune = res['tune']
+
             if isinstance(files, (list, tuple)):
                 self.files = files
             else:
@@ -177,6 +183,7 @@ class Post(object):
             self.editable = True
             self.archive = False if archive is None else archive
             self.pinned = False if pinned is None else pinned
+            self.tune = tune
 
         self.tz = tz
 
@@ -187,7 +194,7 @@ class Post(object):
     def from_data(cls, post_id, author=None, type=None, tags=None,
                   private=None, created=None, title=None, link=None, text=None,
                   edited=None, tz=settings.timezone, archive=False, files=None,
-                  pinned=False):
+                  pinned=False, tune=None):
         self = cls(None)
         if post_id:
             self.id = post_id.lower()
@@ -226,6 +233,7 @@ class Post(object):
 
         self.archive = archive
         self.pinned = pinned
+        self.tune = tune
 
         if isinstance(files, (list, tuple)):
             self.files = files
@@ -268,12 +276,12 @@ class Post(object):
 
             res = db.fetchone("INSERT INTO posts.posts "
                              "(author, type, private, tags, title, link, text, "
-                             "created, edited, archive, pinned, files) "
-                             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                             "created, edited, archive, pinned, tune, files) "
+                             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                              "RETURNING id;",
                              [self.author.id, self.type, bool(self.private),
                               self.tags, self.title, self.link, self.text,
-                              self.created, self.edited, self.archive, self.pinned, self.files])
+                              self.created, self.edited, self.archive, self.pinned, Json(self.tune), self.files])
             if not res:
                 raise PostError
 

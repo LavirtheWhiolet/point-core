@@ -150,6 +150,8 @@ def add_post(post, title=None, link=None, tags=None, author=None, to=None,
         post = Post(None, author=author, title=title, link=link, tags=tags,
                     private=private, text=text.strip(), type=type)
 
+    post.tune = author.get_tune()
+
     if len(post.text) < 3 and not files:
         raise PostTextError
 
