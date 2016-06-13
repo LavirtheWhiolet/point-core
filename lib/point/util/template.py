@@ -238,7 +238,7 @@ md.preprocessors.add('urlcolons', UrlColons(md), '>quoteblock')
 
 md.treeprocessors.add('headersreplace', HeadersReplace(md), '_begin')
 md.treeprocessors.add('tagstyles', TagStyles(md), '>headersreplace')
-md.treeprocessors.add('codepre', CodePre(md), '>tagstyles')
+#md.treeprocessors.add('codepre', CodePre(md), '>tagstyles')
 md.treeprocessors.add('spoiler_san', XmppSpoilerContentsSanitizer(md), '>inline')
 
 md.inlinePatterns.add('url', UrlPattern(), '>automail')
