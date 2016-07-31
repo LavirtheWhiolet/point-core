@@ -6,11 +6,13 @@ try:
 except ImportError:
     import re
 
+import settings
+
 def search_posts(text, user=None, private=None, bookmarks=False,
                  offset=0, limit=20):
     text = re.sub(r'[\(\)\[\]\{\}!?\\/]+', ' ', text).strip()
 
-    es = Elasticsearch()
+    es = Elasticsearch(host=settings.elasticsearch_host, port=settings.elasticsearch_port)
 
     body = {
         'query': {

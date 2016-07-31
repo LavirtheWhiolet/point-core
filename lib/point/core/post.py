@@ -298,7 +298,7 @@ class Post(object):
                         pass
 
         try:
-            es = elasticsearch.Elasticsearch()
+            es = Elasticsearch(host=settings.elasticsearch_host, port=settings.elasticsearch_port)
             es.index(index='point-posts', id=self.id, doc_type='post', body={
                 'post_id': self.id,
                 'post_type': self.type,
@@ -332,7 +332,7 @@ class Post(object):
         for f in files:
             remove_attach(f)
 
-        es = elasticsearch.Elasticsearch()
+        es = Elasticsearch(host=settings.elasticsearch_host, port=settings.elasticsearch_port)
         try:
             es.delete(index='point-posts', doc_type='post', id=self.id)
         except elasticsearch.exceptions.NotFoundError:
@@ -738,7 +738,7 @@ class Comment(object):
                     redis.incr('cmnt_cnt.%s' % unb26(self.post.id))
 
         try:
-            es = elasticsearch.Elasticsearch()
+            es = Elasticsearch(host=settings.elasticsearch_host, port=settings.elasticsearch_port)
             es.index(index='point-comments',
                      id='%s-%s' % (self.post.id, self.id),
                      doc_type='post', body={
@@ -770,7 +770,7 @@ class Comment(object):
             redis.decr('cmnt_cnt.%s' % unb26(self.post.id))
 
         try:
-            es = elasticsearch.Elasticsearch()
+            es = Elasticsearch(host=settings.elasticsearch_host, port=settings.elasticsearch_port)
             try:
                 es.delete(index='point-comments', doc_type='post',
                           id='%s-%s' % (self.post.id, self.id))
