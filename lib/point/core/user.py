@@ -359,19 +359,24 @@ class User(object):
             try:
                 return self.profile[table][param]
             except KeyError:
-                try:
-                    # FIXME: profile models
-                    db.perform("INSERT INTO %s (id) VALUES (%%s);" % \
-                               table, [self.id])
-                except IntegrityError:
-                    pass
+                #try:
+                #    # FIXME: profile models
+                #    db.perform("INSERT INTO %s (id) VALUES (%%s);" % \
+                #               table, [self.id])
+                #except IntegrityError:
+                #    pass
                 res = cache_get('profile:%s:%s' % (table, self.id))
                 if res:
                     self.profile[table] = res
                 else:
                     res = db.fetchone("SELECT * FROM %s WHERE id=%%s;" % \
                                      table, [self.id])
-                    log.debug('RES %s %s' % (table, res))
+                    if not res:
+                        try:
+                            res = db.fetchone("INSERT INTO %s (id) VALUES (%%s) RETURNING *;" % \
+                                              table, [self.id])
+                        except IntegrityError:
+                            return None
                     if res:
                         self.profile[table] = dict(res)
                         cache_store('profile:%s:%s' % (table, self.id),
