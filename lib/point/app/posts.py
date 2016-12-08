@@ -555,6 +555,12 @@ def select_posts(author=None, author_private=None, deny_anonymous=None, private=
         cond.append("p.author NOT IN (SELECT to_user_id FROM users.blacklist "
                          "WHERE user_id=%s)")
         params.append(env.user.id)
+        cond.append("NOT EXISTS (SELECT * FROM posts.tags_blacklist tags_bl "
+                         "WHERE user_id=%s "
+                         "AND (tags_bl.to_user_id IS NULL "
+                              "OR tags_bl.to_user_id = p.author) "
+                         "AND tags_bl.tag IN p.tags)")
+        params.append(env.user.id)
 
     if cond:
         query += " WHERE " + " AND ".join(cond)
